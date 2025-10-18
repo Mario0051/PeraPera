@@ -34,7 +34,7 @@ Before first use, you must configure `perapera_config.ini`. The tool will create
 
 1.  Run the tool once: `python perapera.py`
 2.  Open the newly created `perapera_config.ini`.
-3.  Ensure the `game_data_directory` path points to a folder with a `master` directory and a `meta` file. The tool will attempt to auto-detect this.
+3.  Ensure the `game_data_directory` path points to a folder which contains a `master` directory and a `meta` file. The tool will attempt to auto-detect this.
 
 ## Workflow
 
