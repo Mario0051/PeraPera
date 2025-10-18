@@ -1,0 +1,12 @@
+PySide6
+requests
+fontTools
+UnityPy
+PyCriCodecsEx
+playsound3
+Levenshtein
+pyphen
+selenium
+webdriver-manager
+Pillow
+apsw
