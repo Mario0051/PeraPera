@@ -22,7 +22,7 @@ HACHIMI_DEFAULT_CONFIG = {
 }
 
 def _get_hachimi_asset_path(asset_type: str, asset_name: str) -> Path:
-    if asset_type in ["story", "home", "race", "preview", "generic"]:
+    if asset_type in ["story", "home", "race", "preview", "generic", "uianimation"]:
         return Path(asset_name)
 
     if asset_type == "lyrics":
@@ -63,6 +63,9 @@ def build_hachimi_directory(workspace_dir: Path, hachimi_output_dir: Path, clean
                 continue
 
             hachimi_data = convert_to_hachimi_format(data)
+
+            if not hachimi_data:
+                continue
 
             hachimi_relative_path = _get_hachimi_asset_path(asset_type, asset_name)
             destination_path = assets_output_dir / f"{hachimi_relative_path}.json"

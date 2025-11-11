@@ -50,6 +50,9 @@ class StoryId:
         elif asset_type == "preview":
             story_id.id = filename.split('_')[-1]
             story_id.group = story_id.id
+        elif asset_type == "uianimation":
+            story_id.id = path_str
+            story_id.group = parts[1] if len(parts) > 1 else "" # e.g. "flash"
         else:
             story_id.id = Path(path_str).name
 
@@ -80,8 +83,8 @@ class StoryId:
             return Path(self.type) / self.group / self.id
         elif self.type == "home":
              return Path(self.type) / self.set / self.group
-        elif self.type == "generic":
-             return Path(self.type) / Path(self.id).parent
+        elif self.type == "generic" or self.type == "uianimation":
+             return Path(Path(self.id).parent)
         else:
             return Path(self.type)
 
@@ -93,7 +96,7 @@ class StoryId:
              if sanitized_group_name: prefix_parts.append(sanitized_group_name)
              prefix_parts.append(self.id if self.type == "home" else self.idx)
              return "_".join(prefix_parts)
-         elif self.type == "generic":
+         elif self.type == "generic" or self.type == "uianimation":
              return Path(self.id).stem
          elif self.type == "lyrics" or self.type == "race":
              prefix_parts = [self.id]

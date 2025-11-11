@@ -84,10 +84,38 @@ def _convert_lyrics_format(data: dict) -> dict:
 
     return hachimi_data
 
+def _convert_uianimation_format(data: dict) -> dict:
+    hachimi_data = {}
+    patch_data = {"motion_parameter_list": {}}
+
+    for block in data.get("text_blocks", []):
+        en_text = block.get("enText", "").strip()
+
+        if en_text:
+            motion_idx_str = str(block["motion_index"])
+            text_idx_str = str(block["text_index"])
+
+            if motion_idx_str not in patch_data["motion_parameter_list"]:
+                patch_data["motion_parameter_list"][motion_idx_str] = {"text_param_list": {}}
+
+            patch_data["motion_parameter_list"][motion_idx_str]["text_param_list"][text_idx_str] = {
+                "text": en_text.replace('\\n', '\n')
+            }
+
+    if patch_data["motion_parameter_list"]:
+        if "bundle_hashes" in data:
+            for platform, bhash in data["bundle_hashes"].items():
+                hachimi_data[platform.lower()] = {"bundle_name": bhash}
+        hachimi_data["data"] = patch_data
+
+    return hachimi_data
+
 def convert_to_hachimi_format(data: dict) -> dict:
     asset_type = data.get("type")
 
     if asset_type == "lyrics":
         return _convert_lyrics_format(data)
+    elif asset_type == "uianimation":
+        return _convert_uianimation_format(data)
     else:
         return _convert_story_format(data)

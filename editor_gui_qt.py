@@ -1,7 +1,9 @@
+import os
 import sys
 import json
 from pathlib import Path
 from functools import lru_cache
+from collections import defaultdict
 import traceback
 
 from PySide6.QtWidgets import (
@@ -42,6 +44,7 @@ from gui_gacha_comment_tab import GachaCommentTab
 from api import PeraPeraAPI
 from gui_worker import Worker
 from gui_find_replace import FindReplaceDialog
+from gui_uianimation_tab import UIAnimationEditorTab
 
 class RedlineTextEdit(QTextEdit):
     def __init__(self, max_pixel_width, parent=None):
@@ -165,6 +168,9 @@ class AssetLoaderThread(QThread):
                 if not self._is_running: return
                 self._load_lyrics()
 
+                if not self._is_running: return
+                self._load_ui_animations()
+
             if self._is_running:
                 print("AssetLoaderThread: Scan complete.")
                 self.finished.emit(None)
@@ -215,26 +221,33 @@ class AssetLoaderThread(QThread):
             })
 
     def _load_stories(self):
-        print("AssetLoaderThread: Loading Stories...")
+        print("AssetLoaderThread: Loading Stories (Optimized)...")
         category_names = { "04": "Character Stories", "40": "Training Scenario Events", "50": "Training Character Events" }
         cursor = self.manager.meta_db.cursor()
-        rows = cursor.execute("SELECT DISTINCT SUBSTR(n, 12, 2) FROM a WHERE n LIKE 'story/data/__/____/storytimeline\\__________' ESCAPE '\\'").fetchall()
-        for (cat_id,) in sorted(rows):
+
+        rows = cursor.execute("SELECT n FROM a WHERE n LIKE 'story/data/__/____/storytimeline\\__________' ESCAPE '\\'").fetchall()
+
+        story_tree = defaultdict(lambda: defaultdict(list))
+        for (asset_name,) in rows:
             if not self._is_running: return
-            if cat_id not in category_names: continue
-            cat_label = f"{category_names[cat_id]}"
-            group_rows = cursor.execute(f"SELECT DISTINCT SUBSTR(n, 15, 4) FROM a WHERE n LIKE 'story/data/{cat_id}/____/storytimeline\\__________' ESCAPE '\\'").fetchall()
-            for (group_id,) in sorted(group_rows):
+            parts = asset_name.split('/')
+            cat_id, group_id = parts[2], parts[3]
+            if cat_id in category_names:
+                story_tree[cat_id][group_id].append(asset_name)
+
+        for cat_id, groups in sorted(story_tree.items()):
+            if not self._is_running: return
+            cat_label = category_names[cat_id]
+            for group_id, assets in sorted(groups.items()):
                 if not self._is_running: return
                 group_name = self._get_group_name(cat_id, group_id)
                 group_label = f"{group_id} - {group_name}" if group_name else group_id
-                story_rows = cursor.execute(f"SELECT SUBSTR(n, 34, 9) FROM a WHERE n LIKE 'story/data/{cat_id}/{group_id}/storytimeline\\__________' ESCAPE '\\'").fetchall()
-                for (story_id,) in sorted(story_rows):
+                for asset_name in sorted(assets):
                     if not self._is_running: return
-                    story_name = self._get_story_name(cat_id, story_id)
-                    story_part = story_id[6:]
+                    story_id_str = asset_name.split('_')[-1]
+                    story_name = self._get_story_name(cat_id, story_id_str)
+                    story_part = story_id_str[6:]
                     story_label = f"Part {story_part} - {story_name}" if story_name else f"Part {story_part}"
-                    asset_name = f"story/data/{cat_id}/{group_id}/storytimeline_{story_id}"
                     sid = StoryId.parse_from_path("story", asset_name, group_name=group_name)
                     workspace_path = WORKSPACE_DIR / sid.get_output_path() / f"{sid.get_filename_prefix()}.json"
                     self._load_and_emit_item([cat_label, group_label], {
@@ -279,30 +292,42 @@ class AssetLoaderThread(QThread):
                         })
 
     def _load_home_stories(self):
-        print("AssetLoaderThread: Loading Home Stories...")
+        print("AssetLoaderThread: Loading Home Stories (Optimized)...")
         cursor = self.manager.meta_db.cursor()
-        rows = cursor.execute("SELECT DISTINCT SUBSTR(n, 11, 5) FROM a WHERE n LIKE 'home/data/_____/__/hometimeline\\______\\___\\________' ESCAPE '\\'").fetchall()
+
+        rows = cursor.execute("SELECT n FROM a WHERE n LIKE 'home/data/_____/__/hometimeline\\______\\___\\________' ESCAPE '\\'").fetchall()
         if not rows: return
+
         chara_names = self._get_text_cat(6)
-        for (cat_id,) in sorted(rows):
+
+        home_tree = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        for (asset_name,) in rows:
             if not self._is_running: return
-            group_rows = cursor.execute(f"SELECT DISTINCT SUBSTR(n, 17, 2) FROM a WHERE n LIKE 'home/data/{cat_id}/__/hometimeline\\_{cat_id}\\_%\\________' ESCAPE '\\'").fetchall()
-            for (group_id,) in sorted(group_rows):
+            try:
+                parts = asset_name.split('/')
+                cat_id, group_id = parts[2], parts[3]
+                story_id = asset_name.split('_')[-1]
+                chara_id = story_id[:4]
+                home_tree[cat_id][group_id][chara_id].append(asset_name)
+            except IndexError:
+                continue
+
+        for cat_id, groups in sorted(home_tree.items()):
+            if not self._is_running: return
+            for group_id, charas in sorted(groups.items()):
                 if not self._is_running: return
                 group_label = f"Group {group_id}"
-                chara_rows = cursor.execute(f"SELECT DISTINCT SUBSTR(n, 42, 4) FROM a WHERE n LIKE 'home/data/{cat_id}/{group_id}/hometimeline\\_{cat_id}\\_%\\_%' ESCAPE '\\'").fetchall()
-                for (chara_id,) in sorted(chara_rows):
+                for chara_id, assets in sorted(charas.items()):
                     if not self._is_running: return
                     chara_name = chara_names.get(int(chara_id))
                     chara_label = f"{chara_id} - {chara_name}" if chara_name else chara_id
-                    story_rows = cursor.execute(f"SELECT SUBSTR(n, 42, 7) FROM a WHERE n LIKE 'home/data/{cat_id}/{group_id}/hometimeline\\_{cat_id}\\_%\\_{chara_id}%' ESCAPE '\\'").fetchall()
-                    for (story_id,) in sorted(story_rows):
+                    for asset_name in sorted(assets):
                         if not self._is_running: return
-                        asset_name = f"home/data/{cat_id}/{group_id}/hometimeline_{cat_id}_{group_id}_{story_id}"
+                        story_id_str = asset_name.split('_')[-1]
                         sid = StoryId.parse_from_path("home", asset_name, group_name=chara_name)
                         workspace_path = WORKSPACE_DIR / sid.get_output_path() / f"{sid.get_filename_prefix()}.json"
                         self._load_and_emit_item(["Home Screen", cat_id, group_label, chara_label], {
-                            "display_name": f"ID {story_id[4:]}", "asset_name": asset_name, "workspace_path": str(workspace_path), "data_type": "home"
+                            "display_name": f"ID {story_id_str[4:]}", "asset_name": asset_name, "workspace_path": str(workspace_path), "data_type": "home"
                         })
 
     def _load_race_stories(self):
@@ -333,6 +358,26 @@ class AssetLoaderThread(QThread):
             workspace_path = WORKSPACE_DIR / sid.get_output_path() / f"{sid.get_filename_prefix()}.json"
             self._load_and_emit_item(["Lyrics"], {
                 "display_name": label, "asset_name": asset_name, "workspace_path": str(workspace_path), "data_type": "lyrics"
+            })
+
+    def _load_ui_animations(self):
+        print("AssetLoaderThread: Loading UI Animations...")
+        rows = self.manager.meta_db.cursor().execute("SELECT n FROM a WHERE n LIKE 'uianimation/%'").fetchall()
+        if not rows: return
+
+        for (asset_name,) in sorted(rows):
+            if not self._is_running: return
+
+            sid = StoryId.parse_from_path("uianimation", asset_name)
+            workspace_path = WORKSPACE_DIR / sid.get_output_path() / f"{sid.get_filename_prefix()}.json"
+
+            path_parts = ["UI Animations"] + list(Path(asset_name).parts[1:-1])
+
+            self._load_and_emit_item(path_parts, {
+                "display_name": Path(asset_name).name,
+                "asset_name": asset_name,
+                "workspace_path": str(workspace_path),
+                "data_type": "uianimation"
             })
 
 class AudioEngine:
@@ -921,7 +966,7 @@ class MdbEditorTab(QWidget):
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Entries")
-        self.tree.itemClicked.connect(self.on_item_clicked)
+        self.tree.currentItemChanged.connect(self.on_item_changed)
         splitter.addWidget(self.tree)
 
         editor_widget = QWidget()
@@ -952,8 +997,8 @@ class MdbEditorTab(QWidget):
         current_level[self.current_item_path[-1]] = self.en_text.toPlainText()
         self._mark_as_dirty()
 
-    def on_item_clicked(self, item, column):
-        if not item.childCount() == 0:
+    def on_item_changed(self, item, previous):
+        if not item or not item.childCount() == 0:
             self.jp_text.clear()
             self.en_text.clear()
             self.en_text.setReadOnly(True)
@@ -1126,7 +1171,7 @@ class PeraPeraQTGUI(QMainWindow):
         explorer_layout.addWidget(self.search_bar)
         self.asset_tree = QTreeWidget()
         self.asset_tree.setHeaderLabel("Assets")
-        self.asset_tree.itemDoubleClicked.connect(self.open_file_from_tree)
+        self.asset_tree.itemActivated.connect(self.open_file_from_tree)
         explorer_layout.addWidget(self.asset_tree)
         splitter.addWidget(explorer_container)
 
@@ -1166,25 +1211,45 @@ class PeraPeraQTGUI(QMainWindow):
 
         menu = QMenu()
 
-        action_open_explorer = menu.addAction("Open in File Explorer")
-        action_open_explorer.triggered.connect(lambda: self._action_open_in_explorer(item))
-
-        menu.exec(self.asset_tree.viewport().mapToGlobal(position))
-
-    def _on_asset_tree_context_menu(self, position):
-        item = self.asset_tree.itemAt(position)
-        if not item: return
-
-        menu = QMenu()
-
         action_open_explorer = menu.addAction("Open Containing Folder")
         action_open_explorer.triggered.connect(lambda: self._action_open_in_explorer(item))
 
-        if item.childCount() > 0:
-            menu.addSeparator()
-            action_goto_dialogue = menu.addAction("Find next untranslated dialogue in folder")
-
         menu.exec(self.asset_tree.viewport().mapToGlobal(position))
+
+    def _action_open_in_explorer(self, item: QTreeWidgetItem):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+
+        if not data or "workspace_path" not in data:
+            iterator = QTreeWidgetItemIterator(item)
+            while iterator.value():
+                child_item = iterator.value()
+                child_data = child_item.data(0, Qt.ItemDataRole.UserRole)
+                if child_data and "workspace_path" in child_data:
+                    data = child_data
+                    break
+                iterator += 1
+
+        if not data:
+            self.statusBar().showMessage("Cannot open folder for a category with no extractable items.", 4000)
+            return
+
+        filepath = Path(data["workspace_path"])
+        folder_path = filepath.parent
+
+        if not folder_path.exists():
+            QMessageBox.information(self, "Folder Not Found",
+                                    f"The folder does not exist yet because this asset has not been extracted.\n\nExpected path: {folder_path}")
+            return
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder_path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", folder_path])
+            else:
+                subprocess.run(["xdg-open", folder_path])
+        except Exception as e:
+            QMessageBox.critical(self, "Error Opening Folder", f"Could not open the file explorer:\n{e}")
 
     def _run_task(self, func, *args, **kwargs):
         if self.worker and self.worker.isRunning():
@@ -1258,9 +1323,6 @@ class PeraPeraQTGUI(QMainWindow):
         if error_str:
             QTreeWidgetItem(self.asset_tree, [f"Error loading assets:", error_str])
 
-        for i in range(self.asset_tree.topLevelItemCount()):
-            self.asset_tree.topLevelItem(i).setExpanded(True)
-
     def open_search_dialog(self):
         dialog = SearchDialog(self)
         dialog.exec()
@@ -1276,6 +1338,8 @@ class PeraPeraQTGUI(QMainWindow):
 
         if asset_type == "mdb":
             self.open_mdb_tab(asset_name, filepath, display_name)
+        elif asset_type == "uianimation":
+            self.open_uianimation_tab(filepath, asset_name, display_name, item)
         else:
             self.open_story_tab(filepath, asset_name, asset_type, display_name, item)
 
@@ -1306,6 +1370,21 @@ class PeraPeraQTGUI(QMainWindow):
         new_tab.dirty_state_changed.connect(self.on_tab_dirty_state_changed)
         if new_tab.load():
             index = self.tab_widget.addTab(new_tab, f"DB: {table_name}")
+            self.tab_widget.setTabToolTip(index, str(filepath))
+            self.tab_widget.setCurrentIndex(index)
+            self.open_tabs[tab_key] = index
+            self.sync_tree_to_current_tab()
+
+    def open_uianimation_tab(self, filepath: Path, asset_name: str, display_name: str, tree_item: QTreeWidgetItem):
+        tab_key = str(filepath.resolve())
+        if tab_key in self.open_tabs:
+            self.tab_widget.setCurrentIndex(self.open_tabs[tab_key])
+            return
+
+        new_tab = UIAnimationEditorTab(filepath, asset_name, display_name, tree_item)
+        new_tab.dirty_state_changed.connect(self.on_tab_dirty_state_changed)
+        if new_tab.load():
+            index = self.tab_widget.addTab(new_tab, display_name)
             self.tab_widget.setTabToolTip(index, str(filepath))
             self.tab_widget.setCurrentIndex(index)
             self.open_tabs[tab_key] = index
@@ -1349,22 +1428,28 @@ class PeraPeraQTGUI(QMainWindow):
         self.open_story_tab(filepath, asset_name, asset_type, display_name)
 
     def on_tab_dirty_state_changed(self, is_dirty):
-        tab_widget = self.sender()
-        index = self.tab_widget.indexOf(tab_widget)
-        if index == -1: return
+        tab = self.sender()
+        if not tab:
+            return
 
-        tab_text = tab_widget.display_name
-        self.tab_widget.setTabText(index, f"{tab_text}*" if is_dirty else tab_text)
+        index = self.tab_widget.indexOf(tab)
+        if index == -1:
+            return
 
-        if self.tree_item:
-            tree_text = self.tree_item.text(0)
-            if tree_text.endswith("*"):
-                tree_text = tree_text[:-1].strip()
+        if hasattr(tab, 'display_name'):
+            tab_text = tab.display_name
+            self.tab_widget.setTabText(index, f"{tab_text}*" if is_dirty else tab_text)
+
+        if hasattr(tab, 'tree_item') and tab.tree_item:
+            tree_item = tab.tree_item
+            tree_text = tree_item.text(0)
+
+            clean_text = tree_text.replace(" *", "").strip()
 
             if is_dirty:
-                self.tree_item.setText(0, f"{tree_text} *")
+                tree_item.setText(0, f"{clean_text} *")
             else:
-                self.tree_item.setText(0, tree_text)
+                tree_item.setText(0, clean_text)
 
     def save_current_file(self):
         current_tab = self.tab_widget.currentWidget()

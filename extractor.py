@@ -15,6 +15,7 @@ PARSER_MAP = {
     "lyrics": "parse_lyrics",
     "home": "parse_home_timeline",
     "preview": "parse_preview",
+    "uianimation": "parse_uianimation",
     "generic": "parse_generic",
 }
 
@@ -72,14 +73,23 @@ def extract_asset_data(manager: AssetManager, asset_type: str, asset_name: str, 
     parser_func = getattr(asset_loader, PARSER_MAP[asset_type])
     extracted_data = parser_func(env, manager, story_id.group_name)
 
-    if not extracted_data or not extracted_data.get("text_blocks"):
-        raise RuntimeError("Parsing failed or asset contained no text blocks.")
-
+    if extracted_data is None:
+        raise RuntimeError("Parsing failed: The asset does not contain the expected data structure.")
     extracted_data["asset_name"] = asset_name
     if story_id.group_name: extracted_data["group_name"] = story_id.group_name
     extracted_data["type"] = asset_type
 
-    final_data = merge_translations(extracted_data, workspace_path)
+    if asset_type == "uianimation":
+        hash_str, _ = manager.get_asset_info(asset_name)
+        if hash_str:
+            extracted_data["bundle_hashes"] = {
+                manager.platform.lower(): hash_str
+            }
+
+    final_data = extracted_data
+    if asset_type != "uianimation":
+        final_data = merge_translations(extracted_data, workspace_path)
+        
     return final_data
 
 def process_asset(manager, asset_type, asset_name, workspace_dir, mod_dir, update=False, overwrite=False):

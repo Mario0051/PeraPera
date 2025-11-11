@@ -1,4 +1,4 @@
-import apsw 
+import apsw
 import UnityPy
 import os
 import sys
@@ -19,7 +19,7 @@ ASSET_BASE_KEY = bytes.fromhex("532b4631e4a7b9473e7cfb")
 
 DB_BASE_KEY_FOR_DB_DECRYPT = bytes([
     0xF1, 0x70, 0xCE, 0xA4, 0xDF, 0xCE, 0xA3, 0xE1,
-    0xA5, 0xD8, 0xC7, 0x0B, 0xD1, 0x00, 0x00, 0x00 
+    0xA5, 0xD8, 0xC7, 0x0B, 0xD1, 0x00, 0x00, 0x00
 ])
 
 DB_KEY = bytes([
@@ -29,7 +29,7 @@ DB_KEY = bytes([
 ])
 
 def derive_db_decryption_key(key, base_key):
-    if len(base_key) < 13: 
+    if len(base_key) < 13:
         raise ValueError("Invalid Base Key length. Must be at least 13 bytes.")
     final_key = bytearray()
     for i in range(len(key)):
@@ -37,8 +37,8 @@ def derive_db_decryption_key(key, base_key):
     return final_key
 
 def create_asset_final_key(bundle_key_int):
-    base_key = ASSET_BASE_KEY 
-    bundle_key_bytes = bundle_key_int.to_bytes(8, byteorder="little", signed=True) 
+    base_key = ASSET_BASE_KEY
+    bundle_key_bytes = bundle_key_int.to_bytes(8, byteorder="little", signed=True)
 
     base_len = len(base_key)
     final_key = bytearray(base_len * 8)
@@ -46,7 +46,7 @@ def create_asset_final_key(bundle_key_int):
     for i, b in enumerate(base_key):
         baseOffset = i << 3
         for j, k in enumerate(bundle_key_bytes):
-            final_key[baseOffset + j] = b ^ k 
+            final_key[baseOffset + j] = b ^ k
     return bytes(final_key)
 
 def decrypt_asset_data(data:bytes, final_key:bytes):
@@ -92,8 +92,8 @@ def parse_story_timeline(env, manager: 'AssetManager', group_name: str | None = 
     global_cue_offset = 0
 
     for block_idx, block in enumerate(block_list[1:], start=1):
-        if not (isinstance(block, dict) 
-                and (text_track := block.get("TextTrack")) and isinstance(text_track, dict) 
+        if not (isinstance(block, dict)
+                and (text_track := block.get("TextTrack")) and isinstance(text_track, dict)
                 and (clip_list := text_track.get("ClipList")) and isinstance(clip_list, list) and clip_list):
             print(f"Warning: Skipping block {block_idx-1} due to malformed TextTrack or ClipList.")
             continue
@@ -121,14 +121,13 @@ def parse_story_timeline(env, manager: 'AssetManager', group_name: str | None = 
 
             original_cue_id = text_clip_data.get("CueId")
             final_cue_id = original_cue_id
-            
+
             difference_flag = text_clip_data.get("DifferenceFlag", 0)
             local_cue_offset = 0
-            
-            # DifferenceFlag 2: GenderMale
+
             if difference_flag == 2:
                 local_cue_offset = 1
-            
+
             if original_cue_id is not None and original_cue_id != -1:
                 final_cue_id = original_cue_id + local_cue_offset + global_cue_offset
 
@@ -333,8 +332,74 @@ def parse_generic(env, manager: 'AssetManager' = None, group_name: str | None = 
     print("Parsing as generic asset. No text extraction will be performed.")
     for obj in env.objects:
         if obj.type.name:
-            return {"text_blocks": []} 
+            return {"text_blocks": []}
     return None
+
+def parse_uianimation(env, manager: 'AssetManager' = None, group_name: str | None = None):
+    print("Parsing as UI animation...")
+
+    main_mono = None
+    for obj in env.objects:
+        if obj.type.name == "MonoBehaviour":
+            try:
+                tree = obj.read_typetree()
+                if "_motionParameterGroup" in tree:
+                    main_mono = tree
+                    break
+            except Exception:
+                continue
+
+    if not main_mono:
+        print("Warning: No MonoBehaviour with a '_motionParameterGroup' was found in this asset.")
+        return None
+
+    motion_param_list = main_mono.get("_motionParameterGroup", {}).get("_motionParameterList", [])
+    if not motion_param_list:
+        return {"text_blocks": []}
+
+    motion_map = {motion.get("_id"): motion for motion in motion_param_list}
+    motion_index_map = {motion.get("_id"): i for i, motion in enumerate(motion_param_list)}
+
+    extracted_data = {"text_blocks": []}
+    processed_motion_ids = set()
+
+    def find_text_recursively(motion_id):
+        if not motion_id or motion_id in processed_motion_ids:
+            return
+
+        processed_motion_ids.add(motion_id)
+        motion_param = motion_map.get(motion_id)
+        if not motion_param:
+            return
+
+        motion_idx = motion_index_map.get(motion_id, -1)
+
+        direct_text_params = motion_param.get("_textParamList", [])
+        for text_idx, text_param in enumerate(direct_text_params):
+            if text_param and text_param.get("_text", "").strip():
+                extracted_data["text_blocks"].append({
+                    "motion_index": motion_idx,
+                    "text_index": text_idx,
+                    "motion_name": motion_param.get("_name"),
+                    "object_name": text_param.get("_objectName"),
+                    "jpText": text_param.get("_text"),
+                    "enText": ""
+                })
+
+        for param_list_name in ["_objectParamList", "_planeParamList"]:
+            for item_param in motion_param.get(param_list_name, []):
+                child_motion_id = item_param.get("_childMotionID")
+                if child_motion_id:
+                    find_text_recursively(child_motion_id)
+
+    root_motion_id = main_mono.get("_rootMotionID")
+    if root_motion_id:
+        find_text_recursively(root_motion_id)
+    else:
+        for motion_id in motion_map.keys():
+            find_text_recursively(motion_id)
+
+    return extracted_data
 
 class AssetManager:
     def __init__(self, meta_path=META_DB_PATH, master_path=MASTER_DB_PATH, asset_dir=ASSET_DIR):
@@ -344,11 +409,11 @@ class AssetManager:
         self.platform = "Windows"
 
         try:
-            db_decryption_key = derive_db_decryption_key(DB_KEY, DB_BASE_KEY_FOR_DB_DECRYPT) 
+            db_decryption_key = derive_db_decryption_key(DB_KEY, DB_BASE_KEY_FOR_DB_DECRYPT)
             hex_key = db_decryption_key.hex()
 
             meta_uri_string = f"file:{meta_path}?mode=ro&hexkey={hex_key}"
-            self.meta_db = apsw.Connection(meta_uri_string, 
+            self.meta_db = apsw.Connection(meta_uri_string,
                                           flags=apsw.SQLITE_OPEN_URI | apsw.SQLITE_OPEN_READONLY)
             cursor = self.meta_db.cursor()
             try:
@@ -359,13 +424,13 @@ class AssetManager:
             except Exception as e:
                 print(f"Could not auto-detect platform, defaulting to '{self.platform}'. Error: {e}")
             cursor.execute("PRAGMA cipher='chacha20'")
-            cursor.execute("SELECT 1 FROM a LIMIT 1;") 
+            cursor.execute("SELECT 1 FROM a LIMIT 1;")
             print("Meta DB connected and decrypted (using APSW).")
 
             master_uri_string = f"file:{master_path}?mode=ro"
-            self.master_db = apsw.Connection(master_uri_string, 
+            self.master_db = apsw.Connection(master_uri_string,
                                             flags=apsw.SQLITE_OPEN_URI | apsw.SQLITE_OPEN_READONLY)
-            self.master_db.cursor().execute("SELECT 1 FROM text_data LIMIT 1;") 
+            self.master_db.cursor().execute("SELECT 1 FROM text_data LIMIT 1;")
             print("Master DB connected.")
 
         except Exception as e:
@@ -414,9 +479,9 @@ class AssetManager:
         asset_dir = os.path.dirname(asset_path)
 
         if category == 'bundle':
-            url = f"https://prd-storage-app-umamusume.akamaized.net/dl/resources/{self.platform}/assetbundles/{hash_str[:2]}/{hash_str}"
+            url = f"https://prd-storage-game-umamusume.akamaized.net/dl/resources/{self.platform}/assetbundles/{hash_str[:2]}/{hash_str}"
         elif category == 'generic':
-            url = f"https://prd-storage-app-umamusume.akamaized.net/dl/resources/Generic/{hash_str[:2]}/{hash_str}"
+            url = f"https://prd-storage-game-umamusume.akamaized.net/dl/resources/Generic/{hash_str[:2]}/{hash_str}"
         else:
             print(f"ERROR: Unknown asset download category: '{category}'")
             return False
@@ -471,7 +536,7 @@ class AssetManager:
             print(f"Error: Could not find or download asset bundle: {asset_name}")
             return None
 
-        _, encryption_key_int = self.get_asset_info(asset_name) 
+        _, encryption_key_int = self.get_asset_info(asset_name)
 
         try:
             raw_data = Path(bundle_path).read_bytes()
@@ -510,6 +575,7 @@ class AssetManager:
             "preview": r"outgame/announceevent/loguiasset/ast_announce_event_log_ui_asset_%%%%%",
             "gacha-charaname": r"gacha/charaname/chara_name_%%%%_%",
             "gacha-supportname": r"gacha/supportname/support_name_%%%%%_%",
+            "uianimation": r"uianimation/%",
             "generic": r"%"
         }
         pattern = patterns.get(asset_type)
